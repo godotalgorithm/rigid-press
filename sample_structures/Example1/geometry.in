@@ -1,0 +1,38 @@
+####### BEGIN STRUCTURE #######
+#structure_number = 1
+#Z = 2
+#number_of_atoms_in_molecule = 12 
+#unit_cell_volume = 222.892776 cubic Angstrom
+#attempted_spacegroup = 2
+#attempted_wyckoff_position = 2i
+#site_symmetry_group = 1
+#SPGLIB_detected_spacegroup = 2
+#"All distances in Angstroms and using Cartesian coordinate system"
+lattice_vector     6.637623     0.000000     0.000000 
+lattice_vector     2.456993     9.954315     0.000000 
+lattice_vector     0.162855    -0.123939     3.373433 
+atom     5.092112     0.916110     1.545836  C  
+atom     6.330589     1.419655     1.141240  C  
+atom     4.171308     1.753184     2.180717  C  
+atom     6.648261     2.760329     1.371746  C  
+atom     4.489112     3.093831     2.411123  C  
+atom     5.727653     3.597243     2.006461  C  
+atom     4.843520    -0.130250     1.366231  H  
+atom     7.049659     0.766684     0.645752  H  
+atom     3.204540     1.360044     2.496481  H  
+atom     7.615062     3.153511     1.056172  H  
+atom     3.770151     3.746839     2.906676  H  
+atom     5.976812     4.643529     2.185865  H  
+atom     4.165359     8.914266     1.827596  C  
+atom     2.926881     8.410721     2.232193  C  
+atom     5.086164     8.077192     1.192716  C  
+atom     2.609210     7.070048     2.001686  C  
+atom     4.768359     6.736546     0.962310  C  
+atom     3.529819     6.233134     1.366971  C  
+atom     4.413952     9.960626     2.007202  H  
+atom     2.207811     9.063693     2.727680  H  
+atom     6.052932     8.470332     0.876951  H  
+atom     1.642409     6.676866     2.317261  H  
+atom     5.487319     6.083537     0.466756  H  
+atom     3.280659     5.186847     1.187567  H  
+#######  END  STRUCTURE #######
