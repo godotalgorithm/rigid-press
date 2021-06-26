@@ -20,6 +20,7 @@
 #include <math.h>
 
 #include "crystal.h"
+#include "cocrystal.h"
 
 // prototypes for external dependencies (BLAS & LAPACK)
 void dgemv_(char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
@@ -1176,6 +1177,223 @@ for(int i=0 ; i<3 ; i++)
     printf("latt %d %f %f %f\n", i, xtl->lattice_vectors[i][0], xtl->lattice_vectors[i][1], xtl->lattice_vectors[i][2]);
 }
 for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
+{
+    printf("pos %d %f %f %f\n", j, xtl->Xcord[j], xtl->Ycord[j], xtl->Zcord[j]);
+}
+*/
+    // de-allocate memory for the temporary crystal data structure & state vector
+    free_molecular_crystal(&xtl2);
+    free(state);
+    free(geo);
+    free(work);
+}
+
+// NOTE: cutoff_matrix has matrix blocks for each molecule type, ordered by the mol_types index
+void optimize_cocrystal(cocrystal *xtl, double *cutoff_matrix)
+{
+    /*
+printf("initial geometry:\n");
+for(int i=0 ; i<3 ; i++)
+{
+    printf("latt %d %f %f %f\n", i, xtl->lattice_vectors[i][0], xtl->lattice_vectors[i][1], xtl->lattice_vectors[i][2]);
+}
+for(int j=0 ; j<xtl->n_atoms ; j++)
+{
+    printf("pos %d %f %f %f\n", j, xtl->Xcord[j], xtl->Ycord[j], xtl->Zcord[j]);
+}
+*/
+    // allocate memory for the temporary crystal data structure & state vector
+    struct molecular_crystal xtl2;
+    xtl2.ntype = xtl->n_mol_types;
+    xtl2.nmol = xtl->n_mols;
+    xtl2.natom = (int*)malloc(sizeof(int)*xtl2.ntype);
+    xtl2.geometry = (double**)malloc(sizeof(double*)*xtl2.ntype);
+    xtl2.collide = (double***)malloc(sizeof(double**)*xtl2.ntype);
+    for(int i=0 ; i<xtl2.ntype ; i++)
+    { xtl2.collide[i] = (double**)malloc(sizeof(double*)*xtl2.ntype); }
+    xtl2.type = (int*)malloc(sizeof(int)*xtl2.nmol);
+    xtl2.invert = (int*)malloc(sizeof(int)*xtl2.nmol);
+    for(int i=0 ; i<xtl2.nmol ; i++)
+    { xtl2.type[i] = xtl->mol_types[i]; xtl2.invert[i] = 1; }
+    double *state = (double*)malloc(sizeof(double)*(6 + 7*xtl2.nmol));
+    int max_num = 0;
+    for(int i=0 ; i<xtl2.nmol ; i++)
+    { if(xtl->n_atoms_in_mol[i] > max_num) { max_num = xtl->n_atoms_in_mol[i]; } }
+
+    // form rotation matrix to align lattice vectors (QR decomposition)
+    double latvec[9], latvec2[9];
+    for(int i=0 ; i<3 ; i++)
+    for(int j=0 ; j<3 ; j++)
+    { latvec[j + i*3] = xtl->lattice_vectors[i][j]; }
+    for(int i=0 ; i<9 ; i++)
+    { latvec2[i] = latvec[i]; }
+    double tau[3];
+    int lwork = max_num+100, info, three = 3, one = 1;
+    double *work = (double*)malloc(sizeof(double)*lwork);
+    dgeqrf_(&three, &three, latvec2, &three, tau, work, &lwork, &info);
+    state[0] = -latvec2[0 + 0*3];
+    state[1] = -latvec2[0 + 1*3];
+    state[2] = -latvec2[1 + 1*3];
+    state[3] = -latvec2[0 + 2*3];
+    state[4] = -latvec2[1 + 2*3];
+    state[5] = -latvec2[2 + 2*3];
+
+    // extract a reference geometry for every molecule type
+    int imol, jmol, natom_sum = 0;
+    double coord[3];
+    char trans = 'T', notrans = 'N', left = 'L';
+    for(int i=0 ; i<xtl2.ntype ; i++)
+    {
+        // find the first molecule of the active type
+        imol = 0;
+        while(xtl2.type[imol] != i)
+        {
+            imol++;
+            if(imol == xtl2.nmol)
+            { printf("ERROR: molecule type not found in optimize_cocrystal"); exit(1); }
+        }
+
+        xtl2.natom[i] = xtl->n_atoms_in_mol[imol];
+        natom_sum += xtl2.natom[i];
+        xtl2.geometry[i] = (double*)malloc(sizeof(double)*3*xtl2.natom[i]);
+
+        // store the reference molecule
+        for(int j=0 ; j<xtl2.natom[i] ; j++)
+        {
+            xtl2.geometry[i][0+3*j] = -xtl->Xcord[j];
+            xtl2.geometry[i][1+3*j] = -xtl->Ycord[j];
+            xtl2.geometry[i][2+3*j] = -xtl->Zcord[j];
+        }
+        dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, xtl2.geometry[i], &three, work, &lwork, &info);
+
+        // extract geometric center & center reference geometry
+        coord[0] = coord[1] = coord[2] = 0.0;
+        for(int j=0 ; j<xtl2.natom[i] ; j++)
+        for(int k=0 ; k<3 ; k++)
+        { coord[k] += xtl2.geometry[i][k+3*j]; }
+        coord[0] /= (double)xtl2.natom[i];
+        coord[1] /= (double)xtl2.natom[i];
+        coord[2] /= (double)xtl2.natom[i];
+        for(int j=0 ; j<xtl2.natom[i] ; j++)
+        for(int k=0 ; k<3 ; k++)
+        { xtl2.geometry[i][k+3*j] -= coord[k]; }
+    }
+
+    imol = 0;
+    for(int i=0 ; i<xtl2.ntype ; i++)
+    {
+        jmol = 0;
+        for(int j=0 ; j<xtl2.ntype ; j++)
+        {
+            xtl2.collide[i][j] = (double*)malloc(sizeof(double)*xtl2.natom[i]*xtl2.natom[j]);
+            for(int k=0 ; k<xtl2.natom[j] ; k++)
+            for(int l=0 ; l<xtl2.natom[i] ; l++)
+            { xtl2.collide[i][j][l + k*xtl2.natom[i]] = cutoff_matrix[l+imol + (k+jmol)*natom_sum]; }
+ 
+            jmol += xtl2.natom[j];
+        }
+        imol += xtl2.natom[i];
+    }
+
+    // align & center all molecules (redundant for reference molecules)
+    double *geo = (double*)malloc(sizeof(double)*natom_sum*3);
+    jmol = 0;
+    for(int i=0 ; i<xtl2.nmol ; i++)
+    {
+        imol = xtl2.type[i];
+
+        // transform molecular coordinates to be consistent w/ lattice vectors
+        for(int j=0 ; j<xtl2.natom[imol] ; j++)
+        {
+            geo[0+j*3] = -xtl->Xcord[j+jmol];
+            geo[1+j*3] = -xtl->Ycord[j+jmol];
+            geo[2+j*3] = -xtl->Zcord[j+jmol];
+        }
+        dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, geo, &three, work, &lwork, &info);
+
+        // extract center of molecule
+        for(int j=0 ; j<3 ; j++)
+        {
+            state[j+6 + 7*i] = 0.0;
+            for(int k=0 ; k<xtl2.natom[imol] ; k++)
+            { state[j+6 + 7*i] += geo[j+k*3]; }
+            state[j+6 + 7*i] /= (double)xtl2.natom[imol];
+        }
+        for(int j=0 ; j<xtl2.natom[imol] ; j++)
+        for(int k=0 ; k<3 ; k++)
+        { geo[k + j*3] -= state[k+6 + 7*i]; }
+
+        // form rotation matrix (Kabsch algorithm)
+        char all = 'A';
+        double sv[3], rot[9], U[9], VT[9], zero = 0.0, real_one = 1.0;
+        dgemm_(&notrans, &trans, &three, &three, xtl2.natom, &real_one, geo, &three, xtl2.geometry[imol], &three, &zero, rot, &three);
+        dgesvd_(&all, &all, &three, &three, rot, &three, sv, U, &three, VT, &three, work, &lwork, &info);
+        dgemm_(&notrans, &notrans, &three, &three, &three, &real_one, U, &three, VT, &three, &zero, rot, &three);
+
+        // check for inversion (determinant test)
+        double det = rot[0+0*3]*rot[1+1*3]*rot[2+2*3]
+                    -rot[0+0*3]*rot[1+2*3]*rot[2+1*3]
+                    +rot[0+1*3]*rot[1+2*3]*rot[2+0*3]
+                    -rot[0+1*3]*rot[1+0*3]*rot[2+2*3]
+                    +rot[0+2*3]*rot[1+0*3]*rot[2+1*3]
+                    -rot[0+2*3]*rot[1+1*3]*rot[2+0*3];
+        if(det < 0.0)
+        {
+            xtl2.invert[i] = -1;
+            for(int j=0 ; j<9 ; j++)
+            { rot[j] *= (double)xtl2.invert[i]; }
+        }
+
+        // extract quaternion vector
+        matrix2quaternion(rot, state + 9 + 7*i);
+
+        // update global atom index
+        jmol += xtl2.natom[imol];
+    }
+
+    // run the optimizer
+    optimize(&xtl2, state);
+
+    // convert the result back to the original format
+    for(int i=0 ; i<9 ; i++)
+    { latvec[i] = 0.0; }
+    latvec[0 + 0*3] = -state[0];
+    latvec[0 + 1*3] = -state[1];
+    latvec[1 + 1*3] = -state[2];
+    latvec[0 + 2*3] = -state[3];
+    latvec[1 + 2*3] = -state[4];
+    latvec[2 + 2*3] = -state[5];
+    dormqr_(&left, &notrans, &three, &three, &three, latvec2, &three, tau, latvec, &three, work, &lwork, &info);
+
+    for(int i=0 ; i<3 ; i++)
+    for(int j=0 ; j<3 ; j++)
+    { xtl->lattice_vectors[i][j] = latvec[j + i*3]; }
+
+    jmol = 0;
+    for(int i=0 ; i<xtl2.nmol ; i++)
+    {
+        imol = xtl2.type[i];
+        for(int j=0 ; j<xtl2.natom[imol] ; j++)
+        {
+            double local[3];
+            for(int k=0 ; k<3 ; k++)
+            { local[k] = (double)xtl2.invert[i]*xtl2.geometry[imol][k+3*j]; }
+            position(local, state + 6 + 7*i, coord);
+            dormqr_(&left, &notrans, &three, &one, &three, latvec2, &three, tau, coord, &three, work, &lwork, &info);
+
+            xtl->Xcord[j+jmol] = -coord[0];
+            xtl->Ycord[j+jmol] = -coord[1];
+            xtl->Zcord[j+jmol] = -coord[2];
+        }
+        jmol += xtl2.natom[imol];
+    }
+/*
+printf("final geometry:\n");
+for(int i=0 ; i<3 ; i++)
+{
+    printf("latt %d %f %f %f\n", i, xtl->lattice_vectors[i][0], xtl->lattice_vectors[i][1], xtl->lattice_vectors[i][2]);
+}
+for(int j=0 ; j<xtl->n_atoms ; j++)
 {
     printf("pos %d %f %f %f\n", j, xtl->Xcord[j], xtl->Ycord[j], xtl->Zcord[j]);
 }

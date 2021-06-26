@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "crystal.h"
+#include "cocrystal.h"
 #include "rigid-press.h"
 
 void read_vector(int size, char *path, double *vec)
@@ -84,10 +85,42 @@ int main(void)
     read_crystal("sample_structures/Example2/geometry.in", &xtl);
     read_vector(12*12, "sample_structures/Example2/cutoff_matrix.txt", cutmat);
     optimize_crystal(&xtl, cutmat);
+    free(xtl.atoms);
+
+    // convert example 2 to cocrystal format
+    cocrystal coxtl;
+    coxtl.n_mol_types = 2;
+    coxtl.n_mols = 4;
+    coxtl.n_atoms = 48;
+    coxtl.Xcord = xtl.Xcord;
+    coxtl.Ycord = xtl.Ycord;
+    coxtl.Zcord = xtl.Zcord;
+    coxtl.mol_types = (int*)malloc(sizeof(int)*4);
+    coxtl.mol_types[0] = 0;
+    coxtl.mol_types[1] = 1;
+    coxtl.mol_types[2] = 0;
+    coxtl.mol_types[3] = 1;
+    coxtl.n_atoms_in_mol = (int*)malloc(sizeof(int)*4);
+    for(int i=0 ; i<4 ; i++)
+    { coxtl.n_atoms_in_mol[i] = 12; }
+    for(int i=0 ; i<3 ; i++)
+    for(int j=0 ; j<3 ; j++)
+    { coxtl.lattice_vectors[i][j] = xtl.lattice_vectors[i][j]; }
+    double cutmat2[12*12*4];
+    for(int i=0 ; i<12 ; i++)
+    for(int j=0 ; j<12 ; j++)
+    {
+        cutmat2[i + j*24] = cutmat[i + j*12];
+        cutmat2[12+i + j*24] = cutmat[i + j*12];
+        cutmat2[i + (12+j)*24] = cutmat[i + j*12];
+        cutmat2[12+i + (12+j)*24] = cutmat[i + j*12];
+    }
+    optimize_cocrystal(&coxtl, cutmat2);
+    free(coxtl.mol_types);
+    free(coxtl.n_atoms_in_mol);
     free(xtl.Xcord);
     free(xtl.Ycord);
     free(xtl.Zcord);
-    free(xtl.atoms);
 
     return 0;
 }
