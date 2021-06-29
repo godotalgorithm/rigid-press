@@ -17,6 +17,33 @@ void read_vector(int size, char *path, double *vec)
     fclose(file_ptr);
 }
 
+
+void read_matrix(int dim, char *path,  double *mat)
+{
+   FILE *file_ptr = fopen(path, "r");
+
+   for(int i=0; i<dim ; i++)
+   {
+     for(int j=0 ; j<dim ; j++)
+     { fscanf(file_ptr, "%lf", mat+12*i+j); }
+
+     while(fgetc(file_ptr) != '\n'){}
+   }
+
+}
+
+
+void print_matrix(int dim, double *mat)
+{
+  for(int i=0 ; i<dim ; i++)
+  {
+      for(int j=0 ; j<dim ; j++)
+      { printf("%lf ", *(mat+12*i+j)); }
+
+      printf("\n");
+  }
+}
+
 void read_crystal(char *path, crystal *xtl)
 {
     char line[1000], dummy[1000];
@@ -66,12 +93,17 @@ int main(void)
     { xtl.atoms[i] = ' '; }
     double cutmat[12*12];
     read_crystal("sample_structures/Example1/geometry.in", &xtl);
-    read_vector(12*12, "sample_structures/Example1/cutoff_matrix.txt", cutmat);
+    //read_vector(12*12, "sample_structures/Example1/cutoff_matrix.txt", cutmat);
+    read_matrix(12, "sample_structures/Example1/cutoff_matrix.txt", cutmat);
+    print_matrix(12, cutmat);
+
     optimize_crystal(&xtl, cutmat);
     free(xtl.Xcord);
     free(xtl.Ycord);
     free(xtl.Zcord);
     free(xtl.atoms);
+
+    exit(0);
 
     // read in example 2
     xtl.num_atoms_in_molecule = 12;
