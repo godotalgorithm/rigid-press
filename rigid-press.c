@@ -1241,15 +1241,16 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
     state[5] = -latvec2[2 + 2*3];
 
     // extract a reference geometry for every molecule type
-    int imol, jmol = 0;
+    int imol, jmol;
     double coord[3];
     char trans = 'T', notrans = 'N', left = 'L';
     for(int i=0 ; i<xtl2.ntype ; i++)
     {
         // find the first molecule of the active type
-        imol = 0;
+        imol = jmol = 0;
         while(xtl2.type[imol] != i)
         {
+            jmol += xtl->n_atoms_in_mol[imol];
             imol++;
             if(imol == xtl2.nmol)
             { printf("ERROR: molecule type not found in optimize_cocrystal"); exit(1); }
@@ -1278,38 +1279,25 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
         for(int j=0 ; j<xtl2.natom[i] ; j++)
         for(int k=0 ; k<3 ; k++)
         { xtl2.geometry[i][k+3*j] -= coord[k]; }
-
-        // update the atomic index offset
-        jmol += xtl2.natom[i];
     }
 
+    // allocate memory to the internal cutoff matrices
     for(int i=0 ; i<xtl2.ntype ; i++)
+    for(int j=0 ; j<xtl2.ntype ; j++)
+    { xtl2.collide[i][j] = (double*)malloc(sizeof(double)*xtl2.natom[i]*xtl2.natom[j]); }
+
+    // translate the cutoff matrix formats
+    imol = 0;
+    for(int i=0 ; i<xtl2.nmol ; i++)
     {
-        // find the first molecule of the active type
-        imol = 0;
-        while(xtl2.type[imol] != i)
+        jmol = 0;
+        for(int j=0 ; j<xtl2.nmol ; j++)
         {
-            imol++;
-            if(imol == xtl2.nmol)
-            { printf("ERROR: molecule type not found in optimize_cocrystal"); exit(1); }
-        }
-
-        for(int j=0 ; j<xtl2.ntype ; j++)
-        {
-            // find the 2nd molecule of the active type
-            jmol = 0;
-            while(xtl2.type[jmol] != j)
+            for(int k=0 ; k<xtl2.natom[xtl2.type[j]] ; k++)
+            for(int l=0 ; l<xtl2.natom[xtl2.type[i]] ; l++)
             {
-                jmol++;
-                if(jmol == xtl2.nmol)
-                { printf("ERROR: molecule type not found in optimize_cocrystal"); exit(1); }
+                xtl2.collide[xtl2.type[i]][xtl2.type[j]][l + k*xtl2.natom[xtl2.type[i]]] = cutoff_matrix[l+imol + (k+jmol)*xtl->n_atoms];
             }
-
-            xtl2.collide[i][j] = (double*)malloc(sizeof(double)*xtl2.natom[i]*xtl2.natom[j]);
-            for(int k=0 ; k<xtl2.natom[j] ; k++)
-            for(int l=0 ; l<xtl2.natom[i] ; l++)
-            { xtl2.collide[i][j][l + k*xtl2.natom[i]] = cutoff_matrix[l+imol + (k+jmol)*xtl->n_atoms]; }
- 
             jmol += xtl2.natom[j];
         }
         imol += xtl2.natom[i];
