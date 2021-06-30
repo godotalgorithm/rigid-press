@@ -1009,6 +1009,7 @@ void matrix2quaternion(double *rot, double *quat)
     quat[3] *= t;
 }
 
+// NOTE: rows/columns of the cutoff_matrix are over all atoms in the unit cell
 void optimize_crystal(crystal *xtl, double *cutoff_matrix)
 {
 /*
@@ -1033,8 +1034,9 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
     xtl2.collide = (double***)malloc(sizeof(double**)*1);
     xtl2.collide[0] = (double**)malloc(sizeof(double*)*1);
     xtl2.collide[0][0] = (double*)malloc(sizeof(double)*xtl2.natom[0]*xtl2.natom[0]);
-    for(int i=0 ; i<xtl2.natom[0]*xtl2.natom[0] ; i++)
-    { xtl2.collide[0][0][i] = cutoff_matrix[i]; }
+    for(int i=0 ; i<xtl2.natom[0] ; i++)
+    for(int j=0 ; j<xtl2.natom[0] ; j++)
+    { xtl2.collide[0][0][j+i*xtl2.natom[0]] = cutoff_matrix[j+i*xtl2.natom[0]*xtl2.nmol]; }
     xtl2.type = (int*)malloc(sizeof(int)*xtl2.nmol);
     xtl2.invert = (int*)malloc(sizeof(int)*xtl2.nmol);
     for(int i=0 ; i<xtl2.nmol ; i++)
@@ -1188,10 +1190,10 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
     free(work);
 }
 
-// NOTE: cutoff_matrix has matrix blocks for each molecule type, ordered by the mol_types index
+// NOTE: rows/columns of the cutoff_matrix are over all atoms in the unit cell
 void optimize_cocrystal(cocrystal *xtl, double *cutoff_matrix)
 {
-    /*
+/*
 printf("initial geometry:\n");
 for(int i=0 ; i<3 ; i++)
 {
@@ -1239,7 +1241,7 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
     state[5] = -latvec2[2 + 2*3];
 
     // extract a reference geometry for every molecule type
-    int imol, jmol, natom_sum = 0;
+    int imol, jmol = 0;
     double coord[3];
     char trans = 'T', notrans = 'N', left = 'L';
     for(int i=0 ; i<xtl2.ntype ; i++)
@@ -1254,15 +1256,14 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
         }
 
         xtl2.natom[i] = xtl->n_atoms_in_mol[imol];
-        natom_sum += xtl2.natom[i];
         xtl2.geometry[i] = (double*)malloc(sizeof(double)*3*xtl2.natom[i]);
 
         // store the reference molecule
         for(int j=0 ; j<xtl2.natom[i] ; j++)
         {
-            xtl2.geometry[i][0+3*j] = -xtl->Xcord[j];
-            xtl2.geometry[i][1+3*j] = -xtl->Ycord[j];
-            xtl2.geometry[i][2+3*j] = -xtl->Zcord[j];
+            xtl2.geometry[i][0+3*j] = -xtl->Xcord[j+jmol];
+            xtl2.geometry[i][1+3*j] = -xtl->Ycord[j+jmol];
+            xtl2.geometry[i][2+3*j] = -xtl->Zcord[j+jmol];
         }
         dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, xtl2.geometry[i], &three, work, &lwork, &info);
 
@@ -1277,18 +1278,37 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
         for(int j=0 ; j<xtl2.natom[i] ; j++)
         for(int k=0 ; k<3 ; k++)
         { xtl2.geometry[i][k+3*j] -= coord[k]; }
+
+        // update the atomic index offset
+        jmol += xtl2.natom[i];
     }
 
-    imol = 0;
     for(int i=0 ; i<xtl2.ntype ; i++)
     {
-        jmol = 0;
+        // find the first molecule of the active type
+        imol = 0;
+        while(xtl2.type[imol] != i)
+        {
+            imol++;
+            if(imol == xtl2.nmol)
+            { printf("ERROR: molecule type not found in optimize_cocrystal"); exit(1); }
+        }
+
         for(int j=0 ; j<xtl2.ntype ; j++)
         {
+            // find the 2nd molecule of the active type
+            jmol = 0;
+            while(xtl2.type[jmol] != j)
+            {
+                jmol++;
+                if(jmol == xtl2.nmol)
+                { printf("ERROR: molecule type not found in optimize_cocrystal"); exit(1); }
+            }
+
             xtl2.collide[i][j] = (double*)malloc(sizeof(double)*xtl2.natom[i]*xtl2.natom[j]);
             for(int k=0 ; k<xtl2.natom[j] ; k++)
             for(int l=0 ; l<xtl2.natom[i] ; l++)
-            { xtl2.collide[i][j][l + k*xtl2.natom[i]] = cutoff_matrix[l+imol + (k+jmol)*natom_sum]; }
+            { xtl2.collide[i][j][l + k*xtl2.natom[i]] = cutoff_matrix[l+imol + (k+jmol)*xtl->n_atoms]; }
  
             jmol += xtl2.natom[j];
         }
@@ -1296,7 +1316,7 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
     }
 
     // align & center all molecules (redundant for reference molecules)
-    double *geo = (double*)malloc(sizeof(double)*natom_sum*3);
+    double *geo = (double*)malloc(sizeof(double)*max_num*3);
     jmol = 0;
     for(int i=0 ; i<xtl2.nmol ; i++)
     {

@@ -58,32 +58,36 @@ int main(void)
     crystal xtl;
     xtl.num_atoms_in_molecule = 12;
     xtl.Z = 2;
-    xtl.Xcord = (float*)malloc(sizeof(float)*xtl.Z*xtl.num_atoms_in_molecule);
-    xtl.Ycord = (float*)malloc(sizeof(float)*xtl.Z*xtl.num_atoms_in_molecule);
-    xtl.Zcord = (float*)malloc(sizeof(float)*xtl.Z*xtl.num_atoms_in_molecule);
-    xtl.atoms = (char*)malloc(sizeof(char)*(2*xtl.Z*xtl.num_atoms_in_molecule+1));
-    for(int i=0 ; i<=2*xtl.Z*xtl.num_atoms_in_molecule ; i++)
+    int num_atoms = xtl.Z*xtl.num_atoms_in_molecule;
+    xtl.Xcord = (float*)malloc(sizeof(float)*num_atoms);
+    xtl.Ycord = (float*)malloc(sizeof(float)*num_atoms);
+    xtl.Zcord = (float*)malloc(sizeof(float)*num_atoms);
+    xtl.atoms = (char*)malloc(sizeof(char)*(2*num_atoms+1));
+    double *cutmat = (double*)malloc(sizeof(double)*num_atoms*num_atoms);
+    for(int i=0 ; i<=2*num_atoms ; i++)
     { xtl.atoms[i] = ' '; }
-    double cutmat[12*12];
     read_crystal("sample_structures/Example1/geometry.in", &xtl);
-    read_vector(12*12, "sample_structures/Example1/cutoff_matrix.txt", cutmat);
+    read_vector(num_atoms*num_atoms, "sample_structures/Example1/cutoff_matrix.txt", cutmat);
     optimize_crystal(&xtl, cutmat);
     free(xtl.Xcord);
     free(xtl.Ycord);
     free(xtl.Zcord);
     free(xtl.atoms);
+    free(cutmat);
 
     // read in example 2
     xtl.num_atoms_in_molecule = 12;
     xtl.Z = 4;
-    xtl.Xcord = (float*)malloc(sizeof(float)*xtl.Z*xtl.num_atoms_in_molecule);
-    xtl.Ycord = (float*)malloc(sizeof(float)*xtl.Z*xtl.num_atoms_in_molecule);
-    xtl.Zcord = (float*)malloc(sizeof(float)*xtl.Z*xtl.num_atoms_in_molecule);
-    xtl.atoms = (char*)malloc(sizeof(char)*(2*xtl.Z*xtl.num_atoms_in_molecule+1));
-    for(int i=0 ; i<=2*xtl.Z*xtl.num_atoms_in_molecule ; i++)
+    num_atoms = xtl.Z*xtl.num_atoms_in_molecule;
+    xtl.Xcord = (float*)malloc(sizeof(float)*num_atoms);
+    xtl.Ycord = (float*)malloc(sizeof(float)*num_atoms);
+    xtl.Zcord = (float*)malloc(sizeof(float)*num_atoms);
+    xtl.atoms = (char*)malloc(sizeof(char)*(2*num_atoms+1));
+    cutmat = (double*)malloc(sizeof(double)*num_atoms*num_atoms);
+    for(int i=0 ; i<=2*num_atoms ; i++)
     { xtl.atoms[i] = ' '; }
     read_crystal("sample_structures/Example2/geometry.in", &xtl);
-    read_vector(12*12, "sample_structures/Example2/cutoff_matrix.txt", cutmat);
+    read_vector(num_atoms*num_atoms, "sample_structures/Example2/cutoff_matrix.txt", cutmat);
     optimize_crystal(&xtl, cutmat);
     free(xtl.atoms);
 
@@ -106,21 +110,13 @@ int main(void)
     for(int i=0 ; i<3 ; i++)
     for(int j=0 ; j<3 ; j++)
     { coxtl.lattice_vectors[i][j] = xtl.lattice_vectors[i][j]; }
-    double cutmat2[12*12*4];
-    for(int i=0 ; i<12 ; i++)
-    for(int j=0 ; j<12 ; j++)
-    {
-        cutmat2[i + j*24] = cutmat[i + j*12];
-        cutmat2[12+i + j*24] = cutmat[i + j*12];
-        cutmat2[i + (12+j)*24] = cutmat[i + j*12];
-        cutmat2[12+i + (12+j)*24] = cutmat[i + j*12];
-    }
-    optimize_cocrystal(&coxtl, cutmat2);
+    optimize_cocrystal(&coxtl, cutmat);
     free(coxtl.mol_types);
     free(coxtl.n_atoms_in_mol);
     free(xtl.Xcord);
     free(xtl.Ycord);
     free(xtl.Zcord);
+    free(cutmat);
 
     return 0;
 }
