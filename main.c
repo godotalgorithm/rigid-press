@@ -68,7 +68,7 @@ int main(void)
     { xtl.atoms[i] = ' '; }
     read_crystal("sample_structures/Example1/geometry.in", &xtl);
     read_vector(num_atoms*num_atoms, "sample_structures/Example1/cutoff_matrix.txt", cutmat);
-    optimize_crystal(&xtl, cutmat);
+    optimize_crystal(&xtl, cutmat, 0);
     free(xtl.Xcord);
     free(xtl.Ycord);
     free(xtl.Zcord);
@@ -88,7 +88,7 @@ int main(void)
     { xtl.atoms[i] = ' '; }
     read_crystal("sample_structures/Example2/geometry.in", &xtl);
     read_vector(num_atoms*num_atoms, "sample_structures/Example2/cutoff_matrix.txt", cutmat);
-    optimize_crystal(&xtl, cutmat);
+    optimize_crystal(&xtl, cutmat, 0);
     free(xtl.atoms);
 
     // convert example 2 to cocrystal format
@@ -110,7 +110,7 @@ int main(void)
     for(int i=0 ; i<3 ; i++)
     for(int j=0 ; j<3 ; j++)
     { coxtl.lattice_vectors[i][j] = xtl.lattice_vectors[i][j]; }
-    optimize_cocrystal(&coxtl, cutmat);
+    optimize_cocrystal(&coxtl, cutmat, 0);
     free(coxtl.mol_types);
     free(coxtl.n_atoms_in_mol);
     free(xtl.Xcord);

@@ -21,6 +21,7 @@
 
 #include "crystal.h"
 #include "cocrystal.h"
+#include "rigid-press.h"
 
 // prototypes for external dependencies (BLAS & LAPACK)
 void dgemv_(char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
@@ -894,10 +895,47 @@ double line_optimize(struct molecular_crystal *xtl, // description of the crysta
 
 // main loop of crystal optimization
 void optimize(struct molecular_crystal *xtl, // description of the crystal being optimized
-              double *state) // the crystal's state vector to be updated [6+7*xtl->nmol]
+              double *state, // the crystal's state vector to be updated [6+7*xtl->nmol]
+              int family) // crystal family (see key in rigid-press.h)
 {
     int size = 6+7*xtl->nmol;
     double *workspace = (double*)malloc(sizeof(double)*size*2);
+
+    // construct a constraint matrix for high-symmetry lattice vectors
+    double constraint_mat[36];
+    for(int i=0 ; i<36 ; i++)
+    { constraint_mat[i] = 0.0; }
+    switch(family)
+    {
+        case 1:
+        constraint_mat[0 + 0*6] = constraint_mat[2 + 2*6] = constraint_mat[3 + 3*6] = constraint_mat[5 + 5*6] = 1.0;
+        break;
+
+        case 2:
+        constraint_mat[0 + 0*6] = constraint_mat[2 + 2*6] = constraint_mat[5 + 5*6] = 1.0;
+        break;
+
+        case 3:
+        constraint_mat[5 + 5*6] = 1.0;
+        constraint_mat[0 + 0*6] = constraint_mat[2 + 0*6] = constraint_mat[0 + 2*6] = constraint_mat[2 + 2*6] = 0.5;
+        break;
+
+        case 4:
+        constraint_mat[5 + 5*6] = 1.0;
+        constraint_mat[0 + 0*6] = 0.5;
+        constraint_mat[1 + 1*6] = 0.125;
+        constraint_mat[2 + 2*6] = 0.375;
+        constraint_mat[0 + 1*6] = constraint_mat[1 + 0*6] = -0.25;
+        constraint_mat[0 + 2*6] = constraint_mat[2 + 0*6] = sqrt(3.0)*0.25;
+        constraint_mat[1 + 2*6] = constraint_mat[2 + 1*6] = -sqrt(3.0)*0.125;
+        break;
+
+        case 5:
+        constraint_mat[0 + 0*6] = constraint_mat[2 + 0*6] = constraint_mat[5 + 0*6] = 1.0/3.0;
+        constraint_mat[0 + 2*6] = constraint_mat[2 + 2*6] = constraint_mat[5 + 2*6] = 1.0/3.0;
+        constraint_mat[0 + 5*6] = constraint_mat[2 + 5*6] = constraint_mat[5 + 5*6] = 1.0/3.0;
+        break;
+    }
 
     // find an overpacked volume
     double scale_min = 1.0, scale_max = 1.0;
@@ -927,7 +965,7 @@ void optimize(struct molecular_crystal *xtl, // description of the crystal being
     energy = line_optimize(xtl, state, volume_search, &scale_min, &scale_max, NULL, workspace);
 
     // main optimization loop
-    int iter = 0, lwork = -1, info, inc = 1, progress = 1;
+    int iter = 0, lwork = -1, info, inc = 1, progress = 1, six = 6;
     char jobz = 'V', uplo = 'U', notrans = 'N', trans = 'T';
     double work0, one = 1.0, zero = 0.0;
     double *grad = (double*)malloc(sizeof(double)*size);
@@ -935,12 +973,32 @@ void optimize(struct molecular_crystal *xtl, // description of the crystal being
     double *ev = (double*)malloc(sizeof(double)*size);
     dsyev_(&jobz, &uplo, &size, NULL, &size, NULL, &work0, &lwork, &info);
     lwork = (int)work0;
+    if(lwork < 6*size)
+    { lwork = 6*size; }
     double *work = (double*)malloc(sizeof(double)*lwork);
     double new_energy = energy;
     do
     {
         // expand the total energy to 2nd order
         total_energy_derivative(xtl, state, grad, hess);
+
+        // apply constraints to gradient & Hessian
+        if(family != 0)
+        {
+            dgemv_(&notrans, &six, &six, &one, constraint_mat, &six, grad, &inc, &zero, work, &inc);
+            for(int i=0 ; i<6 ; i++)
+            { grad[i] = work[i]; }
+
+            dgemm_(&notrans, &notrans, &six, &size, &six, &one, constraint_mat, &six, hess, &size, &zero, work, &six);
+            for(int i=0 ; i<6 ; i++)
+            for(int j=0 ; j<size ; j++)
+            { hess[i+j*size] = work[i+j*6]; }
+
+            dgemm_(&notrans, &notrans, &size, &six, &six, &one, hess, &size, constraint_mat, &six, &zero, work, &size);
+            for(int i=0 ; i<size ; i++)
+            for(int j=0 ; j<6 ; j++)
+            { hess[i+j*size] = work[i+j*size]; }
+        }
 
         // transform into normal modes of the quadratic approximant
         dsyev_(&jobz, &uplo, &size, hess, &size, ev, work, &lwork, &info);
@@ -951,6 +1009,35 @@ void optimize(struct molecular_crystal *xtl, // description of the crystal being
         // perform a Tikhonov-regularized line search
         energy = new_energy;
         new_energy = line_optimize(xtl, state, quad_search, grad, ev, hess, workspace);
+
+        // strictly enforce constraints at the end of every optimization step
+        switch(family)
+        {
+            case 1:
+            state[1] = state[4] = 0.0;
+            break;
+
+            case 2:
+            state[1] = state[3] = state[4] = 0.0;
+            break;
+
+            case 3:
+            state[1] = state[3] = state[4] = 0.0;
+            state[2] = state[0];
+            break;
+
+            case 4:
+            state[3] = state[4] = 0.0;
+            state[1] = -0.5*state[0];
+            state[2] = sqrt(3.0)*0.5*state[0];
+            break;
+
+            case 5:
+            state[1] = state[3] = state[4] = 0.0;
+            state[2] = state[0];
+            state[5] = state[0];
+            break;
+        }
     } while((energy - new_energy) > OPTIMIZATION_TOLERANCE*fabs(new_energy));
 
     free(workspace);
@@ -1010,7 +1097,7 @@ void matrix2quaternion(double *rot, double *quat)
 }
 
 // NOTE: rows/columns of the cutoff_matrix are over all atoms in the unit cell
-void optimize_crystal(crystal *xtl, double *cutoff_matrix)
+void optimize_crystal(crystal *xtl, double *cutoff_matrix, int family)
 {
 /*
 printf("initial geometry:\n");
@@ -1023,6 +1110,10 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
     printf("pos %d %f %f %f\n", j, xtl->Xcord[j], xtl->Ycord[j], xtl->Zcord[j]);
 }
 */
+    // test of lattice vector formatting
+    if(family != 0 && (xtl->lattice_vectors[0][1] != 0.0 || xtl->lattice_vectors[0][2] != 0.0 || xtl->lattice_vectors[1][2] != 0.0))
+    { printf("ERROR: incorrect lattice vector format in optimize_crystal"); exit(1); }
+
     // allocate memory for the temporary crystal data structure & state vector
     struct molecular_crystal xtl2;
     xtl2.ntype = 1;
@@ -1053,23 +1144,25 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
     double tau[3];
     int lwork = xtl2.natom[0]+100, info, three = 3, one = 1;
     double *work = (double*)malloc(sizeof(double)*lwork);
-    dgeqrf_(&three, &three, latvec2, &three, tau, work, &lwork, &info);
-    state[0] = -latvec2[0 + 0*3];
-    state[1] = -latvec2[0 + 1*3];
-    state[2] = -latvec2[1 + 1*3];
-    state[3] = -latvec2[0 + 2*3];
-    state[4] = -latvec2[1 + 2*3];
-    state[5] = -latvec2[2 + 2*3];
+    if(family == 0)
+    { dgeqrf_(&three, &three, latvec2, &three, tau, work, &lwork, &info); }
+    state[0] = latvec2[0 + 0*3];
+    state[1] = latvec2[0 + 1*3];
+    state[2] = latvec2[1 + 1*3];
+    state[3] = latvec2[0 + 2*3];
+    state[4] = latvec2[1 + 2*3];
+    state[5] = latvec2[2 + 2*3];
 
     // isolate reference molecule
     char trans = 'T', notrans = 'N', left = 'L';
     for(int i=0 ; i<xtl2.natom[0] ; i++)
     {
-        xtl2.geometry[0][0+3*i] = -xtl->Xcord[i];
-        xtl2.geometry[0][1+3*i] = -xtl->Ycord[i];
-        xtl2.geometry[0][2+3*i] = -xtl->Zcord[i];
+        xtl2.geometry[0][0+3*i] = xtl->Xcord[i];
+        xtl2.geometry[0][1+3*i] = xtl->Ycord[i];
+        xtl2.geometry[0][2+3*i] = xtl->Zcord[i];
     }
-    dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, xtl2.geometry[0], &three, work, &lwork, &info);
+    if(family == 0)
+    { dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, xtl2.geometry[0], &three, work, &lwork, &info); }
 
     // extract geometric center & center reference geometry
     double coord[3];
@@ -1098,11 +1191,12 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
         // transform molecular coordinates to be consistent w/ lattice vectors
         for(int j=0 ; j<xtl2.natom[0] ; j++)
         {
-            geo[0+j*3] = -xtl->Xcord[j+i*xtl2.natom[0]];
-            geo[1+j*3] = -xtl->Ycord[j+i*xtl2.natom[0]];
-            geo[2+j*3] = -xtl->Zcord[j+i*xtl2.natom[0]];
+            geo[0+j*3] = xtl->Xcord[j+i*xtl2.natom[0]];
+            geo[1+j*3] = xtl->Ycord[j+i*xtl2.natom[0]];
+            geo[2+j*3] = xtl->Zcord[j+i*xtl2.natom[0]];
         }
-        dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, geo, &three, work, &lwork, &info);
+        if(family == 0)
+        { dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, geo, &three, work, &lwork, &info); }
 
         // extract center of molecule
         for(int j=0 ; j<3 ; j++)
@@ -1142,18 +1236,19 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
     }
 
     // run the optimizer
-    optimize(&xtl2, state);
+    optimize(&xtl2, state, family);
 
     // convert the result back to the original format
     for(int i=0 ; i<9 ; i++)
     { latvec[i] = 0.0; }
-    latvec[0 + 0*3] = -state[0];
-    latvec[0 + 1*3] = -state[1];
-    latvec[1 + 1*3] = -state[2];
-    latvec[0 + 2*3] = -state[3];
-    latvec[1 + 2*3] = -state[4];
-    latvec[2 + 2*3] = -state[5];
-    dormqr_(&left, &notrans, &three, &three, &three, latvec2, &three, tau, latvec, &three, work, &lwork, &info);
+    latvec[0 + 0*3] = state[0];
+    latvec[0 + 1*3] = state[1];
+    latvec[1 + 1*3] = state[2];
+    latvec[0 + 2*3] = state[3];
+    latvec[1 + 2*3] = state[4];
+    latvec[2 + 2*3] = state[5];
+    if(family == 0)
+    { dormqr_(&left, &notrans, &three, &three, &three, latvec2, &three, tau, latvec, &three, work, &lwork, &info); }
 
     for(int i=0 ; i<3 ; i++)
     for(int j=0 ; j<3 ; j++)
@@ -1166,11 +1261,12 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
         for(int k=0 ; k<3 ; k++)
         { local[k] = (double)xtl2.invert[i]*xtl2.geometry[0][k+3*j]; }
         position(local, state + 6 + 7*i, coord);
-        dormqr_(&left, &notrans, &three, &one, &three, latvec2, &three, tau, coord, &three, work, &lwork, &info);
+        if(family == 0)
+        { dormqr_(&left, &notrans, &three, &one, &three, latvec2, &three, tau, coord, &three, work, &lwork, &info); }
 
-        xtl->Xcord[j+i*xtl2.natom[0]] = -coord[0];
-        xtl->Ycord[j+i*xtl2.natom[0]] = -coord[1];
-        xtl->Zcord[j+i*xtl2.natom[0]] = -coord[2];
+        xtl->Xcord[j+i*xtl2.natom[0]] = coord[0];
+        xtl->Ycord[j+i*xtl2.natom[0]] = coord[1];
+        xtl->Zcord[j+i*xtl2.natom[0]] = coord[2];
     }
 /*
 printf("final geometry:\n");
@@ -1191,7 +1287,7 @@ for(int j=0 ; j<xtl->Z*xtl->num_atoms_in_molecule ; j++)
 }
 
 // NOTE: rows/columns of the cutoff_matrix are over all atoms in the unit cell
-void optimize_cocrystal(cocrystal *xtl, double *cutoff_matrix)
+void optimize_cocrystal(cocrystal *xtl, double *cutoff_matrix, int family)
 {
 /*
 printf("initial geometry:\n");
@@ -1204,6 +1300,10 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
     printf("pos %d %f %f %f\n", j, xtl->Xcord[j], xtl->Ycord[j], xtl->Zcord[j]);
 }
 */
+    // test of lattice vector formatting
+    if(family != 0 && (xtl->lattice_vectors[0][1] != 0.0 || xtl->lattice_vectors[0][2] != 0.0 || xtl->lattice_vectors[1][2] != 0.0))
+    { printf("ERROR: incorrect lattice vector format in optimize_crystal"); exit(1); }
+
     // allocate memory for the temporary crystal data structure & state vector
     struct molecular_crystal xtl2;
     xtl2.ntype = xtl->n_mol_types;
@@ -1232,13 +1332,14 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
     double tau[3];
     int lwork = max_num+100, info, three = 3, one = 1;
     double *work = (double*)malloc(sizeof(double)*lwork);
-    dgeqrf_(&three, &three, latvec2, &three, tau, work, &lwork, &info);
-    state[0] = -latvec2[0 + 0*3];
-    state[1] = -latvec2[0 + 1*3];
-    state[2] = -latvec2[1 + 1*3];
-    state[3] = -latvec2[0 + 2*3];
-    state[4] = -latvec2[1 + 2*3];
-    state[5] = -latvec2[2 + 2*3];
+    if(family == 0)
+    { dgeqrf_(&three, &three, latvec2, &three, tau, work, &lwork, &info); }
+    state[0] = latvec2[0 + 0*3];
+    state[1] = latvec2[0 + 1*3];
+    state[2] = latvec2[1 + 1*3];
+    state[3] = latvec2[0 + 2*3];
+    state[4] = latvec2[1 + 2*3];
+    state[5] = latvec2[2 + 2*3];
 
     // extract a reference geometry for every molecule type
     int imol, jmol;
@@ -1262,11 +1363,12 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
         // store the reference molecule
         for(int j=0 ; j<xtl2.natom[i] ; j++)
         {
-            xtl2.geometry[i][0+3*j] = -xtl->Xcord[j+jmol];
-            xtl2.geometry[i][1+3*j] = -xtl->Ycord[j+jmol];
-            xtl2.geometry[i][2+3*j] = -xtl->Zcord[j+jmol];
+            xtl2.geometry[i][0+3*j] = xtl->Xcord[j+jmol];
+            xtl2.geometry[i][1+3*j] = xtl->Ycord[j+jmol];
+            xtl2.geometry[i][2+3*j] = xtl->Zcord[j+jmol];
         }
-        dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, xtl2.geometry[i], &three, work, &lwork, &info);
+        if(family == 0)
+        { dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, xtl2.geometry[i], &three, work, &lwork, &info); }
 
         // extract geometric center & center reference geometry
         coord[0] = coord[1] = coord[2] = 0.0;
@@ -1313,11 +1415,12 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
         // transform molecular coordinates to be consistent w/ lattice vectors
         for(int j=0 ; j<xtl2.natom[imol] ; j++)
         {
-            geo[0+j*3] = -xtl->Xcord[j+jmol];
-            geo[1+j*3] = -xtl->Ycord[j+jmol];
-            geo[2+j*3] = -xtl->Zcord[j+jmol];
+            geo[0+j*3] = xtl->Xcord[j+jmol];
+            geo[1+j*3] = xtl->Ycord[j+jmol];
+            geo[2+j*3] = xtl->Zcord[j+jmol];
         }
-        dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, geo, &three, work, &lwork, &info);
+        if(family == 0)
+        { dormqr_(&left, &trans, &three, xtl2.natom, &three, latvec2, &three, tau, geo, &three, work, &lwork, &info); }
 
         // extract center of molecule
         for(int j=0 ; j<3 ; j++)
@@ -1360,18 +1463,19 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
     }
 
     // run the optimizer
-    optimize(&xtl2, state);
+    optimize(&xtl2, state, family);
 
     // convert the result back to the original format
     for(int i=0 ; i<9 ; i++)
     { latvec[i] = 0.0; }
-    latvec[0 + 0*3] = -state[0];
-    latvec[0 + 1*3] = -state[1];
-    latvec[1 + 1*3] = -state[2];
-    latvec[0 + 2*3] = -state[3];
-    latvec[1 + 2*3] = -state[4];
-    latvec[2 + 2*3] = -state[5];
-    dormqr_(&left, &notrans, &three, &three, &three, latvec2, &three, tau, latvec, &three, work, &lwork, &info);
+    latvec[0 + 0*3] = state[0];
+    latvec[0 + 1*3] = state[1];
+    latvec[1 + 1*3] = state[2];
+    latvec[0 + 2*3] = state[3];
+    latvec[1 + 2*3] = state[4];
+    latvec[2 + 2*3] = state[5];
+    if(family == 0)
+    { dormqr_(&left, &notrans, &three, &three, &three, latvec2, &three, tau, latvec, &three, work, &lwork, &info); }
 
     for(int i=0 ; i<3 ; i++)
     for(int j=0 ; j<3 ; j++)
@@ -1387,11 +1491,12 @@ for(int j=0 ; j<xtl->n_atoms ; j++)
             for(int k=0 ; k<3 ; k++)
             { local[k] = (double)xtl2.invert[i]*xtl2.geometry[imol][k+3*j]; }
             position(local, state + 6 + 7*i, coord);
-            dormqr_(&left, &notrans, &three, &one, &three, latvec2, &three, tau, coord, &three, work, &lwork, &info);
+            if(family == 0)
+            { dormqr_(&left, &notrans, &three, &one, &three, latvec2, &three, tau, coord, &three, work, &lwork, &info); }
 
-            xtl->Xcord[j+jmol] = -coord[0];
-            xtl->Ycord[j+jmol] = -coord[1];
-            xtl->Zcord[j+jmol] = -coord[2];
+            xtl->Xcord[j+jmol] = coord[0];
+            xtl->Ycord[j+jmol] = coord[1];
+            xtl->Zcord[j+jmol] = coord[2];
         }
         jmol += xtl2.natom[imol];
     }
