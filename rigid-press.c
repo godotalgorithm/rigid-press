@@ -27,7 +27,7 @@
 void dgemv_(char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
 void dgemm_(char*, char*, int*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
 void dsyev_(char*, char*, int*, double*, int*, double*, double*, int*, int*);
-void dgeqrf_(int*, int*, double* , int*, double*, double*, int*, int*);
+void dgeqrf_(int*, int*, double*, int*, double*, double*, int*, int*);
 void dormqr_(char*, char*, int*, int*, int*, double*, int*, double*, double*, int*, double*, int*, int*);
 void dgesvd_(char*, char*, int*, int*, double*, int*, double*, double*, int*, double*, int*, double*, int* ,int*);
 
@@ -35,7 +35,7 @@ void dgesvd_(char*, char*, int*, int*, double*, int*, double*, double*, int*, do
 #define INTERACTION_CUTOFF 10.0
 
 // parameters defining the regularized interatomic contact interaction
-#define INTERACTION_WEIGHT 1e-3
+#define INTERACTION_WEIGHT 0.1
 
 // number of steps to take for each Golden-section line search
 #define GOLDEN_STEPS 20
@@ -524,12 +524,12 @@ double total_energy(struct molecular_crystal *xtl, // description of the crystal
 
             // adjust lattice vector summation for pair of molecules
             int latmin1, latmin2, latmin3, latmax1, latmax2, latmax3;
-            latmin1 = floor(box1[0] - box2[1] - buffer[0]) + 1;
-            latmin2 = floor(box1[2] - box2[3] - buffer[1]) + 1;
-            latmin3 = floor(box1[4] - box2[5] - buffer[2]) + 1;
-            latmax1 = ceil(box1[1] - box2[0] + buffer[0]) - 1;
-            latmax2 = ceil(box1[3] - box2[2] + buffer[1]) - 1;
-            latmax3 = ceil(box1[5] - box2[4] + buffer[2]) - 1;
+            latmin1 = floor(box1[0] - box2[1] - buffer[0]);
+            latmin2 = floor(box1[2] - box2[3] - buffer[1]);
+            latmin3 = floor(box1[4] - box2[5] - buffer[2]);
+            latmax1 = ceil(box1[1] - box2[0] + buffer[0]);
+            latmax2 = ceil(box1[3] - box2[2] + buffer[1]);
+            latmax3 = ceil(box1[5] - box2[4] + buffer[2]);
 
             // loop over interacting unit cells
             for(int k=latmin1 ; k<=latmax1 ; k++)
@@ -622,12 +622,12 @@ void total_energy_derivative(struct molecular_crystal *xtl, // description of th
 
             // adjust lattice vector summation for pair of molecules
             int latmin1, latmin2, latmin3, latmax1, latmax2, latmax3;
-            latmin1 = floor(box1[0] - box2[1] - buffer[0]) + 1;
-            latmin2 = floor(box1[2] - box2[3] - buffer[1]) + 1;
-            latmin3 = floor(box1[4] - box2[5] - buffer[2]) + 1;
-            latmax1 = ceil(box1[1] - box2[0] + buffer[0]) - 1;
-            latmax2 = ceil(box1[3] - box2[2] + buffer[1]) - 1;
-            latmax3 = ceil(box1[5] - box2[4] + buffer[2]) - 1;
+            latmin1 = floor(box1[0] - box2[1] - buffer[0]);
+            latmin2 = floor(box1[2] - box2[3] - buffer[1]);
+            latmin3 = floor(box1[4] - box2[5] - buffer[2]);
+            latmax1 = ceil(box1[1] - box2[0] + buffer[0]);
+            latmax2 = ceil(box1[3] - box2[2] + buffer[1]);
+            latmax3 = ceil(box1[5] - box2[4] + buffer[2]);
 
             // loop over interacting unit cells
             for(int k=latmin1 ; k<=latmax1 ; k++)
@@ -814,9 +814,10 @@ double quad_search(double x, // optimization variable [0,1]
                    double *grad, // gradient in normal coordinates [6+7*xtl->nmol]
                    double *eval, // eigenvalues of the Hessian matrix [6+7*xtl->nmol]
                    double *evec, // eigenvectors of the Hessian matrix [(6+7*xtl->nmol)*(6+7*xtl->nmol)]
-                   double *work) // work vector [12+14*xtl->nmol]
+                   double *work) // work vector [13+14*xtl->nmol]
 {
     int size = 6+7*xtl->nmol;
+    x *= work[2*size]; // hack to tune the search interval
     for(int i=0 ; i<size ; i++)
     {
         work[i] = state[i];
@@ -826,13 +827,13 @@ double quad_search(double x, // optimization variable [0,1]
     int inc = 1;
     double one = 1.0;
     dgemv_(&notrans, &size, &size, &one, evec, &size, work+size, &inc, &one, work, &inc);
-
     return total_energy(xtl, work);
 }
 
 // line optimizer for both objective functions (Golden-section search)
 // code adapted from a Python implementation at https://en.wikipedia.org/wiki/Golden-section_search
 double line_optimize(struct molecular_crystal *xtl, // description of the crystal being optimized
+                     int nstep, // number of optimization steps
                      double *state, // the crystal's state vector in normal coordinates [6+7*xtl->nmol]
                      double (*fptr)(double, struct molecular_crystal*, double*, double*, double*, double*, double*),
                      double *vec1,
@@ -845,7 +846,7 @@ double line_optimize(struct molecular_crystal *xtl, // description of the crysta
     double yc = fptr(c, xtl, state, vec1, vec2, vec3, vec4);
     double yd = fptr(d, xtl, state, vec1, vec2, vec3, vec4);
 
-    for(int i=0 ; i<GOLDEN_STEPS ; i++)
+    for(int i=0 ; i<nstep ; i++)
     {
         if(yc < yd)
         {
@@ -867,23 +868,10 @@ double line_optimize(struct molecular_crystal *xtl, // description of the crysta
         }
     }
 
-    double min, ymin;
-    if(yc < yd)
-    {
-        double ya = fptr(a, xtl, state, vec1, vec2, vec3, vec4);
-        if(ya <= yd)
-        { min = a; ymin = ya; }
-        else // crappy hack to load the minimizer into the workspace
-        { min = d; ymin = fptr(d, xtl, state, vec1, vec2, vec3, vec4); }
-    }
-    else
-    {
-        double yb = fptr(b, xtl, state, vec1, vec2, vec3, vec4);
-        if(yb < yc)
-        { min = b; ymin = yb; }
-        else // crappy hack to load the minimizer into the workspace
-        { min = c; ymin = fptr(c, xtl, state, vec1, vec2, vec3, vec4); }
-    }
+    // crappy hack to load the minimizer into the workspace (extra computation of objective function)
+    double min = c, ymin = yc;
+    if(yd < yc) { min = d; ymin = yd; }
+    fptr(min, xtl, state, vec1, vec2, vec3, vec4);
 
     // extract minimizer from the workspace (a hack) & renormalize quaternions
     int size = 6+7*xtl->nmol;
@@ -962,7 +950,7 @@ void optimize(struct molecular_crystal *xtl, // description of the crystal being
     } while(energy > energy_max);
 
     // preliminary volume optimization
-    energy = line_optimize(xtl, state, volume_search, &scale_min, &scale_max, NULL, workspace);
+    energy = line_optimize(xtl, GOLDEN_STEPS, state, volume_search, &scale_min, &scale_max, NULL, workspace);
 
     // main optimization loop
     int iter = 0, lwork = -1, info, inc = 1, progress = 1, six = 6;
@@ -979,6 +967,9 @@ void optimize(struct molecular_crystal *xtl, // description of the crystal being
     double new_energy = energy;
     do
     {
+        // save previous energy
+        energy = new_energy;
+
         // expand the total energy to 2nd order
         total_energy_derivative(xtl, state, grad, hess);
 
@@ -1006,9 +997,15 @@ void optimize(struct molecular_crystal *xtl, // description of the crystal being
         { work[i] = grad[i]; }
         dgemv_(&trans, &size, &size, &one, hess, &size, work, &inc, &zero, grad, &inc);
 
+        // identify a reasonable search interval
+        double width = 1.0;
+        workspace[2*size] = 1.0; // quick hack to inject a tunable search interval into quad_search
+        while(quad_search((sqrt(5.0) - 1.0)*0.5*width, xtl, state, grad, ev, hess, workspace) > energy)
+        { width *= (sqrt(5.0) - 1.0)*0.5; }
+        workspace[2*size] = width; // quick hack to inject a tunable search interval into quad_search
+
         // perform a Tikhonov-regularized line search
-        energy = new_energy;
-        new_energy = line_optimize(xtl, state, quad_search, grad, ev, hess, workspace);
+        new_energy = line_optimize(xtl, GOLDEN_STEPS, state, quad_search, grad, ev, hess, workspace);
 
         // strictly enforce constraints at the end of every optimization step
         switch(family)
