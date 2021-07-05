@@ -536,8 +536,8 @@ double total_energy(struct molecular_crystal *xtl, // description of the crystal
             for(int l=latmin2 ; l<=latmax2 ; l++)
             for(int m=latmin3 ; m<=latmax3 ; m++)
             {
-                // molecules don't interact with themselves
-                if(i == j && k == 0 && l == 0 && m == 0)
+                // molecules don't interact with themselves & only consider unique pairs in central cell
+                if(i >= j && k == 0 && l == 0 && m == 0)
                 { continue; }
 
                 // shift center of the 2nd molecule
@@ -634,8 +634,8 @@ void total_energy_derivative(struct molecular_crystal *xtl, // description of th
             for(int l=latmin2 ; l<=latmax2 ; l++)
             for(int m=latmin3 ; m<=latmax3 ; m++)
             {
-                // molecules don't interact with themselves
-                if(i == j && k == 0 && l == 0 && m == 0)
+                // molecules don't interact with themselves & only consider unique pairs in central cell
+                if(i >= j && k == 0 && l == 0 && m == 0)
                 { continue; }
 
                 // shift center of the 2nd molecule
